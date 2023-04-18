@@ -39,7 +39,9 @@ float pesoLiquido;
 
 // Variables para el motor paso a paso y su encoder
 volatile int encoderCount = 0;
+double delayRpm;
 unsigned long lastTime = 0;
+unsigned long lastTime2 = 0; 
 
 // Variables de modo del sistema
 String mode = "";
@@ -71,7 +73,6 @@ void loop() {
   // Mide el peso del líquido
 
   if (mode == "vol") {
-    Serial.println("Midiendo...");
     pesoLiquido = MedidaBalanza();
     pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
     Serial.print("Peso balanza: ");
@@ -87,6 +88,7 @@ void loop() {
         chMode();
         return;
       }
+      
       First = 0; // TODO: Mover esta línea adentro del if ???
       if (First == 1) { 
         timeCaudal = millis();
@@ -98,7 +100,7 @@ void loop() {
         Adelante = map(Var, 0, 1023, 0, 255); // Adelante = Var*255/1023 // regla de 3
         Serial.print(100*Adelante/255);
         Serial.println("%");
-        analogWrite(Input1, Adelante);
+        analogWrite(Input1, Adelante); 
       }
       // Si el peso deseado es menor al peso líquido menos X gramos, parar
       else if ((volumenDeseado * Densidad) <= (pesoLiquido + PesoOffset)) {
@@ -133,34 +135,38 @@ void loop() {
 
         chMode();
     }
+    Serial.println();
   } else if (mode == "mix") {
+    if (Serial.available() > 1) {
+      chMode();
+      return;
+    }
+
     if (now - lastTime >= 1000) {
-      Serial.println("Midiendo...");
+      double rpm = ((double) encoderCount/400)*60;
+      Serial.print("RPM: ");
+      Serial.println(rpm);
+      encoderCount = 0;
+
+      lastTime = now;
+    }
+
+    if (now - lastTime2 >= 5000) {
       pesoLiquido = MedidaBalanza();
       pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
       Serial.print("Peso balanza: ");
       Serial.println(pesoLiquido);
-      printRpm();
-      lastTime = now;
+
+      lastTime2 = now;
     }
 
     digitalWrite(STEP, HIGH);
-    delayMicroseconds(rpmDeseado);
+    delayMicroseconds(delayRpm);
     digitalWrite(STEP, LOW);
   }
-  
-  Serial.println(" ");
 }
 
 // FUNCIONES
-
-// Imprimir los RPM
-void printRpm() {
-  double rpm = ((double) encoderCount/400)*60;
-  Serial.print("RPM: ");
-  Serial.println(rpm);
-  encoderCount = 0;
-}
 
 // Función para cambiar la etapa del sistema
 void chMode() {
@@ -171,7 +177,7 @@ void chMode() {
   // Recibir 2 cosas EN ORDEN: Primero un comando 'vol' o 'mix' y luego un parámetro (float) y pasar a la etapa correspondiente
   mode = "";
   while (mode != "vol" && mode != "mix") {
-    Serial.println("Digite por consola el modo de operacion\n\t>vol: Dosificar un volumen de liquido\n\t>mix: Mezclar el liquido a ciertos RPM");
+    Serial.println("Digite por consola el modo de operacion\n\t> vol: Dosificar un volumen de liquido\n\t> mix: Mezclar el liquido a ciertos RPM");
     while (!Serial.available()) {
       pesoLiquido = MedidaBalanza();
       Serial.print("Peso actual: ");
@@ -194,7 +200,6 @@ void chMode() {
       Serial.println(" g");
     }
 
-    pesoBase = pesoLiquido; // TODO: Eliminar esta línea ???
     volumenDeseado = Serial.parseFloat();
     
     Serial.print("Se van a completar ");
@@ -216,13 +221,19 @@ void chMode() {
       Serial.println(" g");
     }
     
-    rpmDeseado = Serial.parseFloat();
+    rpmDeseado = Serial.parseFloat(); // NOTA: El mínimo RPM válido es 85.352 RPM
     
     Serial.print("Se van a mezclar a ");
     Serial.print(rpmDeseado);
-    Serial.println(" RPM");
+    Serial.print(" RPM");
     delay(500);
-    
+
+    //delayRpm = 2640 - 10*sqrt(125*rpmDeseado - 10669); // Función transferencia RPM a delay us
+    delayRpm = 2640 - 10*sqrt(125*rpmDeseado - 10669); // TODO: Función transferencia RPM a delay us
+    Serial.print(" ( delay de ");
+    Serial.print(delayRpm);
+    Serial.println(" us )");
+
     Serial.println(" ");
     Serial.println("¡¡¡LISTO PARA MEZCLAR!!!");
     Serial.println(" ");
