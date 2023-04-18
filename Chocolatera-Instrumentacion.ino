@@ -18,26 +18,32 @@ float PesoOffset = 6; // El peso anterior desde el cual se apaga la motobomba, t
 float Var = 1024; // Valor por defecto de PWM (a escala de 1024)
 int numMedidas = 1; // Numero de medidas que se toman para promediar (balanza)
 
-//Variables agregadas
+// Variables agregadas
 int First = 1; // Para que la primera vez que se encienda la bomba no se tome el tiempo de caudal
-float pesoBase; // Peso base del recipiente
 float volumenDeseado; // Volumen deseado a dosificar (se especifica por consola)
+float rpmDeseado; // RPM deseado a mezclar (se especifica por consola)
 int timeCaudal = 0; // Tiempo transcurrido para calcular el caudal (minibomba)
 
-//Variables balanza
+// Variables balanza
 HX711 balanza(DOUT, CLK);
 
-//Variables para mini bomba de agua
+// Variables para mini bomba de agua
 int Densidad = 1;// en g/mL
 int OnOff = 1; // Switch On/Off para la bomba (1 = On | 0 = Off)
 float Adelante; // Variable PWM 1
 float Atras; // Variable PWM 2 - NO USADA, PORQUE LA MINIBOMBDA SOLO PUEDE ENTREGAR AGUA
 float Detener = map(0, 0, 1023, 0, 255); // 0 
 float pesoRecipiente = 0;
+float pesoBase; // Peso base del recipiente
+float pesoLiquido;
 
-//Variables para el motor paso a paso y su encoder
+// Variables para el motor paso a paso y su encoder
 volatile int encoderCount = 0;
 unsigned long lastTime = 0;
+
+// Variables de modo del sistema
+String mode = "";
+
 
 void setup() {
   Serial.begin(9600);
@@ -55,130 +61,174 @@ void setup() {
   Serial.println(" ");
   Serial.println("¡¡¡LISTO PARA PESAR!!!");
   Serial.println(" ");
-  Serial.println("Digite por consola el valor en mL a completar una vez esté el peso...");
 
-  float pesoLiquido = 0;
-  while (!Serial.available()) {
-    pesoLiquido = MedidaBalanza();
-    Serial.print("Peso actual: ");
-    Serial.print(pesoLiquido);
-    Serial.println(" g");
-  }
-
-  pesoBase = pesoLiquido;
-  // TODO: Recibir 2 cosas EN ORDEN: Primero un comando 'vol' o 'mix' y luego un parámetro (float) y pasar a la etapa correspondiente
-  volumenDeseado = Serial.parseFloat();
-
-  Serial.print("Se van a completar ");
-  Serial.print(volumenDeseado);
-  Serial.println(" mL");
-  delay(500);
-
-  Serial.println(" ");
-  Serial.println("¡¡¡LISTO PARA DOSIFICAR!!!");
-  Serial.println(" ");
-  Serial.println(" ");
+  chMode();
 }
 
 
 void loop() {
   unsigned long now = millis();
   // Mide el peso del líquido
-  Serial.println("Midiendo...");
-  float pesoLiquido = MedidaBalanza();
-  pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
 
-  Serial.print("Peso deseado: ");
-  Serial.println(volumenDeseado * Densidad);
-  Serial.print("Peso obtenido: ");
-  Serial.println(pesoLiquido);
-  Serial.print("Minibomba: ");
+  if (mode == "vol") {
+    Serial.println("Midiendo...");
+    pesoLiquido = MedidaBalanza();
+    pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
+    Serial.print("Peso balanza: ");
+    Serial.println(pesoLiquido);
 
-  // Si la minibomba está encendida, seguir dosificando
-  if (OnOff == 1) {
-    // Si se digita un nuevo valor, cambiar el volumen deseado y reiniciar el proceso
-    if (Serial.available() > 1) {
-      Serial.print("Available 1: ");
-      Serial.println(Serial.available());
-      volumenDeseado = Serial.parseFloat();
+    Serial.print("Peso deseado: ");
+    Serial.println(volumenDeseado * Densidad);
 
-      Serial.print("Se van a completar ");
-      Serial.print(volumenDeseado);
-      Serial.println(" mL");
-      delay(500);
-
-      Serial.println(" ");
-      Serial.println("¡¡¡LISTO PARA DOSIFICAR!!!");
-      Serial.println(" ");
-      Serial.println(" ");
-    }
-    First = 0;
-    if (First == 1) { 
-      timeCaudal = millis();
-      return;
-    }
-    // Si el peso deseado es mayor al peso líquido menos X gramos, seguir dosificando
-    if ((volumenDeseado * Densidad) >= (pesoLiquido + PesoOffset)) {
-      Serial.print("Encendida! : PWM = ");
-      Adelante = map(Var, 0, 1023, 0, 255); // Adelante = Var*255/1023 // regla de 3
-      Serial.print(100*Adelante/255);
-      Serial.println("%");
-      analogWrite(Input1, Adelante);
-    }
-    // Si el peso deseado es menor al peso líquido menos X gramos, parar
-    else if ((volumenDeseado * Densidad) <= (pesoLiquido + PesoOffset)) {
-      Serial.print("Apagando... : CAUDAL = ");
-      OnOff = 0;
-      analogWrite(Input1, Detener);
-      Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal)); 
-        // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
-      Serial.println(" mL/s");
-      
-      Serial.print("Tiempo: ");
-      Serial.print(1000/(millis() - timeCaudal));
-      Serial.println(" s");
-    }
-    else {
-      Serial.println("????"); // Nunca debería llegar aquí
-    }
-  }
-  // Si la minibomba está apagada, esperar a que se digite un nuevo volumen
-  else {
-      while (!Serial.available()) {
-        pesoLiquido = MedidaBalanza();
-        
-        Serial.print("Peso actual: ");
-        Serial.print(pesoLiquido);
-        Serial.println(" g");
-
-        Serial.print("Apagada... : CAUDAL = ");
+    // Si la minibomba está encendida, seguir dosificando
+    if (OnOff == 1) {
+      // Si se digita un nuevo valor, cambiar el volumen deseado y reiniciar el proceso
+      if (Serial.available() > 1) {
+        chMode();
+        return;
+      }
+      First = 0; // TODO: Mover esta línea adentro del if ???
+      if (First == 1) { 
+        timeCaudal = millis();
+        return;
+      }
+      // Si el peso deseado es mayor al peso líquido menos X gramos, seguir dosificando
+      if ((volumenDeseado * Densidad) >= (pesoLiquido + PesoOffset)) {
+        Serial.print("Minibombda encendida! : PWM = ");
+        Adelante = map(Var, 0, 1023, 0, 255); // Adelante = Var*255/1023 // regla de 3
+        Serial.print(100*Adelante/255);
+        Serial.println("%");
+        analogWrite(Input1, Adelante);
+      }
+      // Si el peso deseado es menor al peso líquido menos X gramos, parar
+      else if ((volumenDeseado * Densidad) <= (pesoLiquido + PesoOffset)) {
+        Serial.print("Minibomba apagando... : CAUDAL = ");
+        OnOff = 0;
+        analogWrite(Input1, Detener);
         Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal)); 
           // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
         Serial.println(" mL/s");
+        
+        Serial.print("Tiempo: ");
+        Serial.print(1000/(millis() - timeCaudal));
+        Serial.println(" s");
       }
+      else {
+        Serial.println("????"); // Nunca debería llegar aquí
+      }
+    }
+    // Si la minibomba está apagada, esperar a que se digite un nuevo volumen
+    else {
+        /*while (!Serial.available()) {
+          pesoLiquido = MedidaBalanza();
+          Serial.print("Peso actual: ");
+          Serial.print(pesoLiquido);
+          Serial.println(" g");
 
-      Serial.print("Available 0: ");
-      Serial.println(Serial.available());
+          Serial.print("Apagada... : CAUDAL = ");
+          Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal)); 
+            // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
+          Serial.println(" mL/s");
+        }*/
 
-      pesoBase = pesoLiquido;
-      volumenDeseado = Serial.parseFloat();
-      
-      Serial.print("Se van a completar ");
-      Serial.print(volumenDeseado);
-      Serial.println(" mL");
-      delay(500);
-      OnOff = 1;
-    
-      Serial.println(" ");
-      Serial.println("¡¡¡LISTO PARA DOSIFICAR!!!");
-      Serial.println(" ");
-      Serial.println(" ");
+        chMode();
+    }
+  } else if (mode == "mix") {
+    if (now - lastTime >= 1000) {
+      Serial.println("Midiendo...");
+      pesoLiquido = MedidaBalanza();
+      pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
+      Serial.print("Peso balanza: ");
+      Serial.println(pesoLiquido);
+      printRpm();
+      lastTime = now;
+    }
+
+    digitalWrite(STEP, HIGH);
+    delayMicroseconds(rpmDeseado);
+    digitalWrite(STEP, LOW);
   }
-
+  
   Serial.println(" ");
 }
 
 // FUNCIONES
+
+// Imprimir los RPM
+void printRpm() {
+  double rpm = ((double) encoderCount/400)*60;
+  Serial.print("RPM: ");
+  Serial.println(rpm);
+  encoderCount = 0;
+}
+
+// Función para cambiar la etapa del sistema
+void chMode() {
+  /**
+   * Obtiene el modo del sistema y luego su parámetro
+   */
+
+  // Recibir 2 cosas EN ORDEN: Primero un comando 'vol' o 'mix' y luego un parámetro (float) y pasar a la etapa correspondiente
+  mode = "";
+  while (mode != "vol" && mode != "mix") {
+    Serial.println("Digite por consola el modo de operacion\n\t>vol: Dosificar un volumen de liquido\n\t>mix: Mezclar el liquido a ciertos RPM");
+    while (!Serial.available()) {
+      pesoLiquido = MedidaBalanza();
+      Serial.print("Peso actual: ");
+      Serial.print(pesoLiquido);
+      Serial.println(" g");
+    }
+    mode = Serial.readStringUntil('\n');
+    mode.trim();
+    Serial.println(" ");
+  }
+
+  if (mode == "vol") {
+    OnOff = 1;
+    Serial.println("Digite por consola el valor en mL a completar una vez este el peso...");
+
+    while (!Serial.available()) {
+      pesoLiquido = MedidaBalanza();
+      Serial.print("Peso actual: ");
+      Serial.print(pesoLiquido);
+      Serial.println(" g");
+    }
+
+    pesoBase = pesoLiquido; // TODO: Eliminar esta línea ???
+    volumenDeseado = Serial.parseFloat();
+    
+    Serial.print("Se van a completar ");
+    Serial.print(volumenDeseado);
+    Serial.println(" mL");
+    delay(500);
+    
+    Serial.println(" ");
+    Serial.println("¡¡¡LISTO PARA DOSIFICAR!!!");
+    Serial.println(" ");
+    Serial.println(" ");
+  } else if (mode == "mix") {
+    Serial.println("Digite por consola los RPM a los que desea mezclar...");
+
+    while (!Serial.available()) {
+      pesoLiquido = MedidaBalanza();
+      Serial.print("Peso actual: ");
+      Serial.print(pesoLiquido);
+      Serial.println(" g");
+    }
+    
+    rpmDeseado = Serial.parseFloat();
+    
+    Serial.print("Se van a mezclar a ");
+    Serial.print(rpmDeseado);
+    Serial.println(" RPM");
+    delay(500);
+    
+    Serial.println(" ");
+    Serial.println("¡¡¡LISTO PARA MEZCLAR!!!");
+    Serial.println(" ");
+    Serial.println(" ");
+  }
+}
 
 // Función de conteo de ticks del encoder
 void countPulses() {
