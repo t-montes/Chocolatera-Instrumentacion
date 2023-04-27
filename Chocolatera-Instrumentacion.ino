@@ -10,17 +10,22 @@
 #define EncoderA 3  // Canal A Encoder, Motor PaP - Dirección
 #define EncoderB 2  // Canal B Encoder, Motor PaP - Ticks
 
+
+# define nModes 3  // vol, mix, temp, ...
+
 // VARIABLES MODIFICABLES
 float Peso_conocido = 220;// en gramos | usado para calibrar la balanza
 float Escala = -1308.5; // Escala actual a la que funciona la balanza (hallada al calibrar)
+float PesoRealVaso = 9; // TODO: Peso real del vaso (sin líquido) en gramos
+float ToleranciaCalibracion = 2; // Tolerancia de la calibración (en gramos)
 
-float PesoOffset = 6; // El peso anterior desde el cual se apaga la motobomba, teniendo en cuenta el agua sobrante que puede excederse de la manguera.
+float PesoOffset = 2; // El peso anterior desde el cual se apaga la motobomba, teniendo en cuenta el agua sobrante que puede excederse de la manguera.
 float Var = 1024; // Valor por defecto de PWM (a escala de 1024)
 int numMedidas = 1; // Numero de medidas que se toman para promediar (balanza)
 
 // Variables agregadas
 int First = 1; // Para que la primera vez que se encienda la bomba no se tome el tiempo de caudal
-float volumenDeseado; // Volumen deseado a dosificar (se especifica por consola)
+float pesoDeseado; // Peso deseado a dosificar (se especifica por consola)
 float rpmDeseado; // RPM deseado a mezclar (se especifica por consola)
 int timeCaudal = 0; // Tiempo transcurrido para calcular el caudal (minibomba)
 
@@ -29,7 +34,7 @@ HX711 balanza(DOUT, CLK);
 
 // Variables para mini bomba de agua
 int Densidad = 1;// en g/mL
-int OnOff = 1; // Switch On/Off para la bomba (1 = On | 0 = Off)
+float OnOff = 1.0; // Switch On/Off para la bomba (1 = On | 0 = Off)
 float Adelante; // Variable PWM 1
 float Atras; // Variable PWM 2 - NO USADA, PORQUE LA MINIBOMBDA SOLO PUEDE ENTREGAR AGUA
 float Detener = map(0, 0, 1023, 0, 255); // 0 
@@ -44,11 +49,14 @@ unsigned long lastTime = 0;
 unsigned long lastTime2 = 0; 
 
 // Variables de modo del sistema
-String mode = "";
+String mode[nModes];
 
 
 void setup() {
   Serial.begin(9600);
+
+  resetModes();
+  Adelante = map(Var, 0, 1023, 0, 255); // Adelante = Var*255/1023 // regla de 3
 
   // Inicializar los pines
   pinMode( Input1, OUTPUT );
@@ -67,22 +75,21 @@ void setup() {
   chMode();
 }
 
-
 void loop() {
   unsigned long now = millis();
   // Mide el peso del líquido
 
-  if (mode == "vol") {
-    pesoLiquido = MedidaBalanza();
+  if (isMode("vol")) {
+    pesoLiquido = MedidaBalanza(numMedidas);
     pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
-    Serial.print("Peso balanza: ");
-    Serial.println(pesoLiquido);
+    //Serial.print("Peso balanza: ");
+    //Serial.println(pesoLiquido);
 
-    Serial.print("Peso deseado: ");
-    Serial.println(volumenDeseado * Densidad);
+    //Serial.print("Peso deseado: ");
+    //Serial.println(pesoDeseado);
 
     // Si la minibomba está encendida, seguir dosificando
-    if (OnOff == 1) {
+    if (OnOff > 0) {
       // Si se digita un nuevo valor, cambiar el volumen deseado y reiniciar el proceso
       if (Serial.available() > 1) {
         chMode();
@@ -95,19 +102,18 @@ void loop() {
         return;
       }
       // Si el peso deseado es mayor al peso líquido menos X gramos, seguir dosificando
-      if ((volumenDeseado * Densidad) >= (pesoLiquido + PesoOffset)) {
-        Serial.print("Minibombda encendida! : PWM = ");
-        Adelante = map(Var, 0, 1023, 0, 255); // Adelante = Var*255/1023 // regla de 3
-        Serial.print(100*Adelante/255);
-        Serial.println("%");
-        analogWrite(Input1, Adelante); 
+      if ((pesoDeseado) >= (pesoLiquido + PesoOffset)) {
+        //Serial.print("Minibombda encendida! : PWM = ");
+        //Serial.print(100*Adelante/255);
+        //Serial.println("%");
+        analogWrite(Input1, Adelante*OnOff);
       }
       // Si el peso deseado es menor al peso líquido menos X gramos, parar
-      else if ((volumenDeseado * Densidad) <= (pesoLiquido + PesoOffset)) {
+      else if ((pesoDeseado) <= (pesoLiquido + PesoOffset)) {
         Serial.print("Minibomba apagando... : CAUDAL = ");
-        OnOff = 0;
+        OnOff = 0.0;
         analogWrite(Input1, Detener);
-        Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal)); 
+        Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal));
           // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
         Serial.println(" mL/s");
         
@@ -121,22 +127,24 @@ void loop() {
     }
     // Si la minibomba está apagada, esperar a que se digite un nuevo volumen
     else {
-        /*while (!Serial.available()) {
-          pesoLiquido = MedidaBalanza();
-          Serial.print("Peso actual: ");
-          Serial.print(pesoLiquido);
-          Serial.println(" g");
-
-          Serial.print("Apagada... : CAUDAL = ");
-          Serial.print(1000*(pesoLiquido/Densidad)/(millis() - timeCaudal)); 
-            // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
-          Serial.println(" mL/s");
-        }*/
-
+        pesoLiquido = MedidaBalanza(5);
+        pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
+        Serial.print("Peso balanza: ");
+        Serial.println(pesoLiquido);
+    
+        Serial.print("Peso deseado: ");
+        Serial.println(pesoDeseado);
+        if ((pesoDeseado) >= (pesoLiquido + PesoOffset)) {
+          OnOff = 0.9; // Se dosifica al 90% de PWM
+          return;
+        }
+        
+        removeMode("vol");
         chMode();
     }
-    Serial.println();
-  } else if (mode == "mix") {
+  } 
+  
+  if (isMode("mix")) {
     if (Serial.available() > 1) {
       chMode();
       return;
@@ -152,7 +160,7 @@ void loop() {
     }
 
     if (now - lastTime2 >= 10000) {
-      pesoLiquido = MedidaBalanza();
+      pesoLiquido = MedidaBalanza(numMedidas);
       pesoLiquido = pesoLiquido >= 0 ? pesoLiquido : -pesoLiquido;
       Serial.print("Peso balanza: ");
       Serial.println(pesoLiquido);
@@ -163,7 +171,7 @@ void loop() {
     digitalWrite(STEP, HIGH);
     delayMicroseconds(delayRpm);
     digitalWrite(STEP, LOW);
-  }
+  } 
 }
 
 // FUNCIONES
@@ -177,53 +185,69 @@ void chMode() {
   analogWrite(Input1, Detener);
 
   // Recibir 2 cosas EN ORDEN: Primero un comando 'vol' o 'mix' y luego un parámetro (float) y pasar a la etapa correspondiente
-  mode = "";
-  while (mode != "vol" && mode != "mix") {
-    Serial.println("Digite por consola el modo de operacion\n\t> vol: Dosificar un volumen de liquido\n\t> mix: Mezclar el liquido a ciertos RPM");
+  String mode2 = "";
+  while (mode2 != "vol" && mode2 != "mix" && mode2 != "temp") {
+    Serial.println("Digite por consola el modo de operacion\n\t> vol: Dosificar un volumen de liquido\n\t> mix: Mezclar el liquido a ciertos RPM\n\t> temp: Medir la temperatura\n\t> tare: Calibrar la balanza\n\t> stop: Detener todos los procesos");
     while (!Serial.available()) {
-      pesoLiquido = MedidaBalanza();
+      pesoLiquido = MedidaBalanza(numMedidas);
       Serial.print("Peso actual: ");
       Serial.print(pesoLiquido);
       Serial.println(" g");
     }
-    mode = Serial.readStringUntil('\n');
-    mode.trim();
+    mode2 = Serial.readStringUntil('\n');
+    mode2.trim();
+    // One-time modes: stop & tare
+    if (mode2 == "stop") {
+      resetModes();
+    } else if (mode2 == "tare") {
+      CalibracionBalanza();
+    } else {
+      // si ya está en el modo, no agregarlo
+      if (!isMode(mode2)) {
+        addMode(mode2);
+      }
+    }
+    Serial.println(" ");
+    printModes();
     Serial.println(" ");
   }
 
-  if (mode == "vol") {
+  if (mode2 == "vol") {
     OnOff = 1;
     Serial.println("Digite por consola el valor en mL a completar una vez este el peso...");
 
     while (!Serial.available()) {
-      pesoLiquido = MedidaBalanza();
+      pesoLiquido = MedidaBalanza(numMedidas);
       Serial.print("Peso actual: ");
       Serial.print(pesoLiquido);
       Serial.println(" g");
     }
 
-    volumenDeseado = Serial.parseFloat();
+    float volumenDeseado = Serial.parseFloat();
+    pesoDeseado = volumenDeseado * Densidad;
     
     Serial.print("Se van a completar ");
     Serial.print(volumenDeseado);
-    Serial.println(" mL");
+    Serial.print(" mL (");
+    Serial.print(pesoDeseado);
+    Serial.print(" g)");
     delay(500);
     
     Serial.println(" ");
     Serial.println("¡¡¡LISTO PARA DOSIFICAR!!!");
     Serial.println(" ");
     Serial.println(" ");
-  } else if (mode == "mix") {
+  } else if (mode2 == "mix") {
     Serial.println("Digite por consola los RPM a los que desea mezclar...");
 
     while (!Serial.available()) {
-      pesoLiquido = MedidaBalanza();
+      pesoLiquido = MedidaBalanza(numMedidas);
       Serial.print("Peso actual: ");
       Serial.print(pesoLiquido);
       Serial.println(" g");
     }
     
-    rpmDeseado = Serial.parseFloat()*2; // NOTA: El mínimo RPM válido es 85.352 RPM
+    rpmDeseado = Serial.parseFloat(); // NOTA: El mínimo RPM válido es 70 RPM
     
     Serial.print("Se van a mezclar a ");
     Serial.print(rpmDeseado);
@@ -231,7 +255,8 @@ void chMode() {
     delay(500);
 
     //delayRpm = 2640 - 10*sqrt(125*rpmDeseado - 10669); // Función transferencia RPM a delay us
-    delayRpm = 2188.36 - 0.363636*sqrt(68750*rpmDeseado - 9.4162e6); // TODO: Función transferencia RPM a delay us
+    //delayRpm = 2188.36 - 0.363636*sqrt(68750*2*rpmDeseado - 9.4162e6); 
+    delayRpm = pow(8.69799685132514e-6*rpmDeseado,-1.0330578512396695);
     Serial.print(" ( delay de ");
     Serial.print(delayRpm);
     Serial.println(" us )");
@@ -252,56 +277,63 @@ void countPulses() {
 void antiDebounce(byte boton) {
   delay(100);
   while (digitalRead(boton))
-    ;  //Anti-Rebote
+    ;  //Anti-debounce
   delay(100);
 }
 
 //Función de Calibración de Balanza: Permite calibrar la medida de la balanza según un peso de calibración conocido
 void CalibracionBalanza(void)
 {
-  Serial.println("~ CALIBRACIÓN DE LA BALANZA ~");
-  Serial.println(" ");
-  delay(100);
-  Serial.println("No ponga ningun objeto sobre la balanza");
-  Serial.println(" ");
-  balanza.set_scale(); //Ajusta la escala a su valor por defecto que es 1
-  balanza.tare(20);  //El peso actual es considerado "Tara".
-  delay(50);
-  Serial.print("...Destarando...");
-  delay(250);
+  while (true) {
+    Serial.println("~ CALIBRACIÓN DE LA BALANZA ~");
+    Serial.println(" ");
+    delay(100);
+    Serial.println("No ponga ningun objeto sobre la balanza");
+    Serial.println(" ");
+    balanza.set_scale(); //Ajusta la escala a su valor por defecto que es 1
+    balanza.tare(20);  //El peso actual es considerado "Tara".
+    delay(50);
+    Serial.print("...Destarando...");
+    delay(250);
 
-  /* //Calibración de la balanza (comentado, ya que ya se calibró)
-  Serial.println(" ");
-  Serial.println(" ");
-  Serial.print("Coloque un peso de ");
-  Serial.print(Peso_conocido);
-  Serial.print("g, luego oprima el botón.");
-  while (!digitalRead(BtnInput)) {} // esperar a que se oprima el botón
-  antiDebounce(BtnInput);
-  Serial.println(" Espere...");
+    /* //Calibración de la balanza (comentado, ya que ya se calibró)
+    Serial.println(" ");
+    Serial.println(" ");
+    Serial.print("Coloque un peso de ");
+    Serial.print(Peso_conocido);
+    Serial.print("g, luego oprima el botón.");
+    while (!digitalRead(BtnInput)) {} // esperar a que se oprima el botón
+    antiDebounce(BtnInput);
+    Serial.println(" Espere...");
+    PromMedicion = balanza.get_value(100); //20 mediciones  //Obtiene el promedio de las mediciones analogas según valor ingresado  
+    Escala = PromMedicion / Peso_conocido; // Relación entre el promedio de las mediciones analogas con el peso conocido en gramos
+    Serial.print("Escala: ");
+    Serial.println(Escala);*/
 
-  PromMedicion = balanza.get_value(100); //20 mediciones  //Obtiene el promedio de las mediciones analogas según valor ingresado  
-  Escala = PromMedicion / Peso_conocido; // Relación entre el promedio de las mediciones analogas con el peso conocido en gramos
-  Serial.print("Escala: ");
-  Serial.println(Escala);*/
+    Serial.println(" ");
+    Serial.println("Ponga el vaso:");
+    for (int i = 3; i >= 0; i--) {
+      Serial.print(" ... ");
+      Serial.print(i);
+      delay(1000);
+    }
 
-  Serial.println(" ");
-  Serial.println("Ponga el vaso:");
-  for (int i = 3; i >= 0; i--)
-  {
-    Serial.print(" ... ");
-    Serial.print(i);
-    delay(1000);
+    //while (!digitalRead(BtnInput)) {} // esperar a que se oprima el botón
+    //antiDebounce(BtnInput);
+    Serial.println("\nEspere...");
+
+    float PesoVaso = balanza.get_units(20);
+    Serial.print("El vaso tiene un peso de ");
+    Serial.print(PesoVaso/Escala);
+    Serial.println(" g");
+    if ((PesoVaso/Escala - ToleranciaCalibracion) > PesoRealVaso || (PesoVaso/Escala + ToleranciaCalibracion) < PesoRealVaso) {
+      Serial.println("La calibración no es correcta, calibrando de nuevo...");
+      delay(1000);
+      continue;
+    } else {
+      break;
+    }
   }
-
-  //while (!digitalRead(BtnInput)) {} // esperar a que se oprima el botón
-  //antiDebounce(BtnInput);
-  Serial.println("\nEspere...");
-
-  float PesoVaso = balanza.get_units(20);
-  Serial.print("El vaso tiene un peso de ");
-  Serial.print(PesoVaso/Escala);
-  Serial.println(" g");
 
   balanza.tare(100);
   
@@ -309,24 +341,56 @@ void CalibracionBalanza(void)
 }
 
 //Función de Medición de Balanza: Permite obtener la medida actual en peso (g) de la balanza
-float MedidaBalanza(void) {
-  float peso; // variable para el peso actualmente medido en gramos
-  float pl1 = 0;
-  float pl2 = 0;
-  float pl3 = 0;
-  float promPL = 0;
-
-  for (int i = 1; i >= 0; i--) {
-    peso = balanza.get_units(numMedidas); // Entrega el peso actualmente medido en gramos
-    // if (peso < 0) peso = peso * -1;
-    
-    pl1 = peso;
-    pl2 = pl1;
-    pl3 = pl2;
-
-    promPL = (pl1 + pl2 + pl3) / 3;
-  }
-
-  return promPL;
+float MedidaBalanza(int n) {
+  float peso;
+  do { 
+    peso = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
+  } while (peso > 1000); // if peso > 1000, se mide de nuevo
+  return peso;
 }
 
+void resetModes(void) {
+  for (int i = 0; i < nModes; i++) {
+    mode[i] = "";
+  }
+}
+
+void printModes(void) {
+  Serial.print("Modos seleccionados: ");
+  for (int i = 0; i < nModes; i++) {
+    if (mode[i] != "") {
+      Serial.print(mode[i]);
+      Serial.print(" ");
+    }
+  }
+  Serial.println();
+}
+
+void addMode(String newStr) {
+  for (int i = 0; i < nModes; i++) {
+    if (mode[i] == "") {
+      mode[i] = newStr;
+      return;
+    }
+  }
+  Serial.println("ERROR: No hay espacio para más modos");
+}
+
+void removeMode(String str) {
+  for (int i = 0; i < nModes; i++) {
+    if (mode[i] == str) {
+      mode[i] = "";
+      return;
+    }
+  }
+  Serial.println("ERROR: No se encontró el modo");
+}
+
+bool isMode(String m) {
+  for (int i = 0; i < nModes; i++) {
+    if (m == mode[i]) {
+      return true;
+    }
+  }
+  return false;
+}
