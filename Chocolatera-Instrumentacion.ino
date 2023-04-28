@@ -15,6 +15,7 @@
 float pesoConocido = 200; // SOLO para hallar la escala de la balanza
 float escala = -1308.5;  // Escala de la balanza (después de calibrar)
 float pesoVaso = 36;      // Peso real del vaso
+float toleranciaVaso = 2;
 int numMedidas = 1;     // Número de medidas para promediar (entre más, más lento)
 
 // Minibomba
@@ -30,8 +31,8 @@ float pesoActual; // Peso medido por la balanza
 
 // Minibomba
 int firstTime = 1; // Para calcular el caudal de la minibomba (1 | 0)
-int timeCaudal = 0; // Tiempo transcurrido para calcular el caudal (minibomba)
-float caudal = 0; // Caudal de la minibomba (mL/s)
+//int timeCaudal = 0; // Tiempo transcurrido para calcular el caudal (minibomba)
+//float caudal = 0; // Caudal de la minibomba (mL/s)
 
 int modeVol = 0; // Modo de dosificación (0: APAGADO | 1: ENCENDIDO)
 float volumenDeseado; // Volumen deseado a dosificar (se especifica por consola)
@@ -106,15 +107,14 @@ void loop() {
     // ENCENDIDA
     if (onOff > 0) {
       if (firstTime) {
-        timeCaudal = now; // Reiniciar el tiempo para medir el caudal
+        //timeCaudal = now; // Reiniciar el tiempo para medir el caudal
         firstTime = 0;
+        analogWrite(MB_FRONT, pwmFuncionamiento * onOff);
       }
 
       medidaBalanza(numMedidas);
 
-      if (pesoDeseado >= (pesoActual + pesoOffset)) {
-        analogWrite(MB_FRONT, pwmFuncionamiento * onOff);
-      } else {
+      if (!(pesoDeseado >= (pesoActual + pesoOffset))) {
         onOff = 0;
         analogWrite(MB_FRONT, 0);
       }
@@ -122,12 +122,14 @@ void loop() {
     // APAGADA
     else {
       medidaBalanza(5);
+      medidaBalanza(15);
       if (pesoDeseado >= (pesoActual + pesoOffset)) {
-        onOff = 0.9; // Se enciende la minibomba al 90% de su PWM
+        firstTime = 1;
+        onOff = modeMix ? 0.3 : 0.75; // Se enciende la minibomba al 75% de su PWM
       } else {
         Serial.println("La dosificación ha finalizado");
-        firstTime = 1;
         modeVol = 0;
+        modeChanged();
       }
     }
   }
@@ -136,12 +138,8 @@ void loop() {
   if (modeMix) {
     printRpmMotor();
     // Si no está encendido el modo de volumen, igual toca mostrar el peso
-    if (!modeVol && ((now - lastTimeBalanza) >= intervalPrintBalanza)) {
-      // TODO: Revisar si realmente es necesario el if
-      medidaBalanza(numMedidas);
-      lastTimeBalanza = now;
-    }
-
+    medidaBalanza(numMedidas);
+    
     digitalWrite(MP_STEP, HIGH);
     delayMicroseconds(delayRpm);
     digitalWrite(MP_STEP, LOW);
@@ -165,39 +163,51 @@ void countPulses(void) {
 
 // Función de calibración de la balanza
 void calibracionBalanza() {
-  Serial.println("¡¡¡CALIBRANDO BALANZA!!!");
-  Serial.println("\nNo ponga ningun objeto sobre la balanza");
-  delay(500);
-  balanza.tare(20); // Tara sin el recipiente
+  while (true) {
+    Serial.println("¡¡¡CALIBRANDO BALANZA!!!");
+    Serial.println("\nNo ponga ningun objeto sobre la balanza");
+    delay(500);
+    balanza.tare(20); // Tara sin el recipiente
 
-  // Acá se calcula la escala de la balanza
+    // Acá se calcula la escala de la balanza
 
-  Serial.println("\nColoque el recipiente sobre la balanza");
-  for (int i = 0; i < 3; i++) {
-    delay(1500);
-    Serial.println(3 - i);
+    Serial.println("\nColoque el recipiente sobre la balanza");
+    for (int i = 0; i < 3; i++) {
+      delay(1000);
+      Serial.println(3 - i);
+    }
+
+    pesoRecipiente = balanza.get_units(20);
+    Serial.print("\nPeso del recipiente: ");
+    Serial.print(pesoRecipiente/escala);
+    Serial.println(" g");
+
+
+    if ((pesoRecipiente/escala - toleranciaVaso) > pesoVaso || (pesoRecipiente/escala + toleranciaVaso) < pesoVaso) {
+      Serial.println("Calibracion erronea\tVolviendo a medir");
+      delay(1000);
+    } else {
+      balanza.tare(100);
+      balanza.set_scale(escala);
+      break;
+    }
   }
-
-  pesoRecipiente = balanza.get_units(20);
-  Serial.print("\nPeso del recipiente: ");
-  Serial.print(pesoRecipiente/escala);
-  Serial.println(" g");
-
-  balanza.tare(100);
-  balanza.set_scale(escala);
 }
 
 // Función de medición de la balanza (actualiza la variable pesoActual directamente)
 void medidaBalanza(int n) {
-  do { 
-    pesoActual = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
-  } while (pesoActual > 1000); // if peso > 1000, se mide de nuevo
+  // TODO: recomentar: do { 
+  //  pesoActual = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
+  //} while (pesoActual > 1000); // if peso > 1000, se mide de nuevo
 
   if ((now - lastTimeBalanza) >= intervalPrintBalanza) {
     Serial.print("Peso actual: ");
     Serial.print(pesoActual);
     Serial.println(" g");
     lastTimeBalanza = now;
+    do { 
+      pesoActual = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
+    } while (pesoActual > 1000); // if peso > 1000, se mide de nuevo
   }
 }
 
@@ -212,12 +222,13 @@ void printStatusMinibomba(void) {
       lastTimeMinibomba = now;
     }
   } else {
-    caudal = 1000*(pesoActual/densidad)/(now - timeCaudal);
+    //caudal = 1000*(pesoActual/densidad)/(now - timeCaudal);
       // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
     Serial.println("Minibomba APAGADA");
-    Serial.print("Caudal: ");
-    Serial.print(caudal);
-    Serial.println(" mL/s");
+
+    //Serial.print("Caudal: ");
+    //Serial.print(caudal);
+    //Serial.println(" mL/s");
   }
 }
 
@@ -261,7 +272,6 @@ void changeMode(void) {
     case 'v':
       volumenDeseado = cmdValue.toInt();
       pesoDeseado = volumenDeseado * densidad;
-      onOff = 1;
       modeVol = 1;
 
       Serial.println("\n¡¡¡LISTO PARA DOSIFICAR!!!\n");
@@ -335,12 +345,19 @@ void changeMode(void) {
       break;
   }
 
+  firstTime = modeVol ? 1 : 0;
+  onOff = modeVol ? (modeMix ? 0.3 : 1) : 0;
+
+  modeChanged();
+}
+
+void modeChanged(void) {
   if (modeVol || modeMix || modeTemp) {
     modeNone = 0;
-    intervalPrintBalanza = modeMix ? 5000 : 500;
-    intervalPrintMinibomba = modeMix ? 5000 : 500;
-    intervalPrintMotor = modeMix ? 1000 : 500;
-    intervalPrintTemp = modeMix ? 5000 : 500;
+    intervalPrintBalanza = modeMix ? 900 : 0;
+    intervalPrintMinibomba = modeMix ? 900 : 0;
+    intervalPrintMotor = modeMix ? 900 : 0;
+    intervalPrintTemp = modeMix ? 900 : 0;
   } else {
     modeNone = 1;
     intervalPrintBalanza = 0;
