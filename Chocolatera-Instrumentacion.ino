@@ -235,7 +235,7 @@ void printStatusMinibomba(void) {
 // Función de impresión de los RPM del motor
 void printRpmMotor(void) {
   if ((now - lastTimeMotor) >= intervalPrintMotor) {
-    rpm = ((double) encoderCount/800)*60;
+    rpm = ((double) encoderCount/960)*60;
     Serial.print("RPM: ");
     Serial.println(rpm);
     encoderCount = 0;
@@ -285,7 +285,7 @@ void changeMode(void) {
 
     case 'm':
       rpmDeseado = cmdValue.toInt();
-      delayRpm = pow(8.69799685132514e-6*rpmDeseado, -1.0330578512396695);
+      delayRpm = pow(2*8.69799685132514e-6*rpmDeseado, -1.0330578512396695);
       modeMix = 1;
 
       Serial.println("\n¡¡¡LISTO PARA MEZCLAR!!!\n");
@@ -354,10 +354,10 @@ void changeMode(void) {
 void modeChanged(void) {
   if (modeVol || modeMix || modeTemp) {
     modeNone = 0;
-    intervalPrintBalanza = modeMix ? 900 : 0;
-    intervalPrintMinibomba = modeMix ? 900 : 0;
-    intervalPrintMotor = modeMix ? 900 : 0;
-    intervalPrintTemp = modeMix ? 900 : 0;
+    intervalPrintBalanza = (modeMix && modeVol) ? 900 : (modeMix ? 6000 : 0);
+    intervalPrintMinibomba = (modeMix && modeVol) ? 900 : (modeMix ? 6000 : 0);
+    intervalPrintMotor = (modeMix && modeVol) ? 900 : (modeMix ? 1200 : 0);
+    intervalPrintTemp = (modeMix && modeVol) ? 900 : (modeMix ? 6000 : 0);
   } else {
     modeNone = 1;
     intervalPrintBalanza = 0;
