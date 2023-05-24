@@ -1,21 +1,27 @@
 /* --------------------------------- LIBRERIAS --------------------------------- */
 #include "HX711.h" //Modulo HX711 - Celda de carga
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <SoftwareSerial.h>
 
 /* ----------------------------------- PINES ----------------------------------- */
 #define BA_DOUT A1    // Balanza - DT
 #define BA_CLK A0     // Balanza - CLOCK
-#define MB_FRONT 9    // Minibomba - Control 1, para controlar 'Adelante'
-#define MB_BACK 10    // Minibomba - Control 2 , para controlar 'Atras'
+#define MB_FRONT 8    // Minibomba - Control 1, para controlar 'Adelante'
+#define MB_BACK 9     // Minibomba - Control 2 , para controlar 'Atras'
 #define MP_STEP 4     // Motor PaP - Pin STEP (la DIR no se requiere controlar)
-#define MP_ENCA 3     // Motor PaP Encoder - Canal A Dirección
-#define MP_ENCB 2     // Motor PaP Encoder - Canal B Ticks
+#define MP_ENCA 5     // Motor PaP Encoder - Canal A Dirección
+#define MP_ENCB 3     // Motor PaP Encoder - Canal B Ticks
+const int TMP = 2;    // Sensor de temperatura
+const int BT_RX = 10; // Bluetooth RX
+const int BT_TX = 11; // Bluetooth TX
 
 /* ---------------------------- VARIABLES MODULADAS ---------------------------- */
 // Balanza
 float pesoConocido = 200; // SOLO para hallar la escala de la balanza
 float escala = -1308.5;  // Escala de la balanza (después de calibrar)
-float pesoVaso = 36;      // Peso real del vaso
-float toleranciaVaso = 2;
+float pesoVaso = 41;      // Peso real del vaso
+float toleranciaVaso = 3;
 int numMedidas = 1;     // Número de medidas para promediar (entre más, más lento)
 
 // Minibomba
@@ -48,9 +54,14 @@ int modeMix = 0; // Modo de mezclado (0: APAGADO | 1: ENCENDIDO)
 float rpmDeseado; // RPM deseado a mezclar (se especifica por consola)
 
 // Temperatura
+OneWire oneWireObjeto(TMP);
+DallasTemperature sensorDS18B20(&oneWireObjeto);
 float tempActual; // Temperatura actual del líquido
 
 int modeTemp = 0; // Modo de medir temperatura (0: APAGADO | 1: ENCENDIDO)
+
+// Modulo Bluetooth
+SoftwareSerial BT(BT_RX, BT_TX);
 
 // Comandos
 String cmd; // Comando recibido por consola
@@ -76,6 +87,8 @@ int intervalPrintTemp = 0; // (MODIFICABLE) Intervalo para imprimir la temperatu
 
 void setup() {
   Serial.begin(9600);
+  BT.begin(9600);
+  sensorDS18B20.begin();
 
   pinMode(MB_FRONT, OUTPUT);
   pinMode(MB_BACK, OUTPUT);
@@ -84,14 +97,18 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(MP_ENCB), countPulses, CHANGE);
 
-  calibracionBalanza();
+  while (BT.available() == 0) {}
+  BT.readString();
+
+  calibracionBalanza(); 
+  BT.println("¡¡¡LISTO PARA PESAR!!!");
   Serial.println("\n¡¡¡LISTO PARA PESAR!!!\n");
 }
 
 void loop() {
   now = millis();
 
-  if (Serial.available() > 1) {
+  if (BT.available() > 1) {// TODO: if (Serial.available() > 1) {
     // Digitar los comandos de la forma: "modo valor"
     changeMode();
   }
@@ -109,6 +126,7 @@ void loop() {
       if (firstTime) {
         //timeCaudal = now; // Reiniciar el tiempo para medir el caudal
         firstTime = 0;
+        Serial.println("Encendiendo minibomba!");
         analogWrite(MB_FRONT, pwmFuncionamiento * onOff);
       }
 
@@ -125,7 +143,7 @@ void loop() {
       medidaBalanza(15);
       if (pesoDeseado >= (pesoActual + pesoOffset)) {
         firstTime = 1;
-        onOff = modeMix ? 0.3 : 0.75; // Se enciende la minibomba al 75% de su PWM
+        onOff = modeMix ? 0.65 : 0.75; // Se enciende la minibomba al 75% de su PWM
       } else {
         Serial.println("La dosificación ha finalizado");
         modeVol = 0;
@@ -148,8 +166,8 @@ void loop() {
 
   /* ------------------------------- TEMPERATURA ------------------------------- */
   if (modeTemp) {
+    medidaBalanza(numMedidas);
     printTemp();
-    // TODO: Sensor de Temperatura
   }
 
 }
@@ -164,28 +182,36 @@ void countPulses(void) {
 // Función de calibración de la balanza
 void calibracionBalanza() {
   while (true) {
+    BT.println("¡¡¡CALIBRANDO BALANZA!!!");
     Serial.println("¡¡¡CALIBRANDO BALANZA!!!");
+    BT.println("\nNo ponga ningun objeto sobre la balanza");
     Serial.println("\nNo ponga ningun objeto sobre la balanza");
     delay(500);
     balanza.tare(20); // Tara sin el recipiente
 
     // Acá se calcula la escala de la balanza
 
+    BT.println("\nColoque el recipiente sobre la balanza");
     Serial.println("\nColoque el recipiente sobre la balanza");
     for (int i = 0; i < 3; i++) {
       delay(1000);
+      BT.println(3 - i);
       Serial.println(3 - i);
     }
 
     pesoRecipiente = balanza.get_units(20);
+    BT.print("\nPeso del recipiente: ");
     Serial.print("\nPeso del recipiente: ");
+    BT.print(pesoRecipiente/escala);
     Serial.print(pesoRecipiente/escala);
+    BT.println(" g");
     Serial.println(" g");
 
 
     if ((pesoRecipiente/escala - toleranciaVaso) > pesoVaso || (pesoRecipiente/escala + toleranciaVaso) < pesoVaso) {
+      BT.println("Calibracion erronea\tVolviendo a medir");
       Serial.println("Calibracion erronea\tVolviendo a medir");
-      delay(1000);
+      delay(4000);
     } else {
       balanza.tare(100);
       balanza.set_scale(escala);
@@ -246,7 +272,16 @@ void printRpmMotor(void) {
 // Función de impresión de la temperatura
 void printTemp(void) {
   if ((now - lastTimeTemp) >= intervalPrintTemp) {
-    // TODO: Sensor de Temperatura
+    sensorDS18B20.requestTemperatures();
+
+    Serial.print("Temperatura sensor 1: ");
+    Serial.print(sensorDS18B20.getTempCByIndex(0));
+    Serial.println(" C");
+
+    //Serial.print("Temperatura sensor 2: ");
+    //Serial.print(sensorDS18B20.getTempCByIndex(1));
+    //Serial.println(" C");
+
     lastTimeTemp = now;
   }
 }
@@ -262,7 +297,9 @@ void changeMode(void) {
    * - s: Detener todos los modos
    * - o Y: Off Y (apagar el modo Y)
    */
-  cmd = Serial.readString();
+  cmd = BT.readString();//TODO: cmd = Serial.readString();
+  Serial.print("BT received: ");
+  Serial.println(cmd);
   cmd.trim();
   cmdSep = cmd.indexOf(" ");
   cmdType = cmd.substring(0, cmdSep);
@@ -298,9 +335,10 @@ void changeMode(void) {
       break;
 
     case 't':
-      // TODO: Sensor de Temperatura
-
       modeTemp = 1;
+
+      Serial.println("\n¡¡¡LISTO PARA MEDIR TEMPERATURA!!!\n");
+      delay(500);      
       break;
 
     case 'b':
@@ -346,7 +384,7 @@ void changeMode(void) {
   }
 
   firstTime = modeVol ? 1 : 0;
-  onOff = modeVol ? (modeMix ? 0.3 : 1) : 0;
+  onOff = modeVol ? (modeMix ? 0.65 : 1) : 0;
 
   modeChanged();
 }
