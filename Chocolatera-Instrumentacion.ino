@@ -5,16 +5,16 @@
 #include <SoftwareSerial.h>
 
 /* ----------------------------------- PINES ----------------------------------- */
-#define BA_DOUT A1    // Balanza - DT
-#define BA_CLK A0     // Balanza - CLOCK
-#define MB_FRONT 8    // Minibomba - Control 1, para controlar 'Adelante'
-#define MB_BACK 9     // Minibomba - Control 2 , para controlar 'Atras'
-#define MP_STEP 4     // Motor PaP - Pin STEP (la DIR no se requiere controlar)
-#define MP_ENCA 5     // Motor PaP Encoder - Canal A Dirección
-#define MP_ENCB 3     // Motor PaP Encoder - Canal B Ticks
-const int TMP = 2;    // Sensor de temperatura
-const int BT_RX = 10; // Bluetooth RX
-const int BT_TX = 11; // Bluetooth TX
+#define BA_DOUT A1       // Balanza - DT
+#define BA_CLK A0        // Balanza - CLOCK
+#define MB_FRONT 8       // Minibomba - Control 1, para controlar 'Adelante'
+#define MB_BACK 9        // Minibomba - Control 2 , para controlar 'Atras'
+#define MP_STEP 4        // Motor PaP - Pin STEP (DIR no se requiere controlar)
+#define MP_ENCA 5        // Motor PaP Encoder - Canal A Dirección
+#define MP_ENCB 3        // Motor PaP Encoder - Canal B Ticks
+const int TMP = 2;       // Sensor de temperatura
+const int BT_RX = 10;    // Bluetooth RX
+const int BT_TX = 11;    // Bluetooth TX
 
 /* ---------------------------- VARIABLES MODULADAS ---------------------------- */
 // Balanza
@@ -100,6 +100,8 @@ void setup() {
   while (BT.available() == 0) {}
   BT.readString();
 
+  BT.println("¡Encendido!");
+  
   calibracionBalanza(); 
   BT.println("¡¡¡LISTO PARA PESAR!!!");
   Serial.println("\n¡¡¡LISTO PARA PESAR!!!\n");
@@ -108,7 +110,7 @@ void setup() {
 void loop() {
   now = millis();
 
-  if (BT.available() > 1) {// TODO: if (Serial.available() > 1) {
+  if (BT.available() > 1) {
     // Digitar los comandos de la forma: "modo valor"
     changeMode();
   }
@@ -126,7 +128,7 @@ void loop() {
       if (firstTime) {
         //timeCaudal = now; // Reiniciar el tiempo para medir el caudal
         firstTime = 0;
-        Serial.println("Encendiendo minibomba!");
+        BT.println("Encendiendo minibomba!");
         analogWrite(MB_FRONT, pwmFuncionamiento * onOff);
       }
 
@@ -145,7 +147,7 @@ void loop() {
         firstTime = 1;
         onOff = modeMix ? 0.65 : 0.75; // Se enciende la minibomba al 75% de su PWM
       } else {
-        Serial.println("La dosificación ha finalizado");
+        BT.println("La dosificación ha finalizado");
         modeVol = 0;
         modeChanged();
       }
@@ -189,8 +191,6 @@ void calibracionBalanza() {
     delay(500);
     balanza.tare(20); // Tara sin el recipiente
 
-    // Acá se calcula la escala de la balanza
-
     BT.println("\nColoque el recipiente sobre la balanza");
     Serial.println("\nColoque el recipiente sobre la balanza");
     for (int i = 0; i < 3; i++) {
@@ -222,14 +222,10 @@ void calibracionBalanza() {
 
 // Función de medición de la balanza (actualiza la variable pesoActual directamente)
 void medidaBalanza(int n) {
-  // TODO: recomentar: do { 
-  //  pesoActual = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
-  //} while (pesoActual > 1000); // if peso > 1000, se mide de nuevo
-
   if ((now - lastTimeBalanza) >= intervalPrintBalanza) {
-    Serial.print("Peso actual: ");
-    Serial.print(pesoActual);
-    Serial.println(" g");
+    BT.print("Peso actual: ");
+    BT.print(pesoActual);
+    BT.println(" g");
     lastTimeBalanza = now;
     do { 
       pesoActual = balanza.get_units(n); // Entrega el peso actualmente medido en gramos
@@ -241,20 +237,20 @@ void medidaBalanza(int n) {
 void printStatusMinibomba(void) {
   if (onOff > 0) {
     if ((now - lastTimeMinibomba) >= intervalPrintMinibomba) {
-      Serial.println("Minibomba ENCENDIDA");
-      Serial.print("PWM: ");
-      Serial.print((pwmFuncionamiento * onOff)/2.55);
-      Serial.println("%");
+      BT.println("Minibomba ENCENDIDA");
+      BT.print("PWM: ");
+      BT.print((pwmFuncionamiento * onOff)/2.55);
+      BT.println("%");
       lastTimeMinibomba = now;
     }
   } else {
+    BT.println("Minibomba APAGADA");
+
     //caudal = 1000*(pesoActual/densidad)/(now - timeCaudal);
       // (ms/s) * (g / (g / mL)) / (ms) = (1/s) * (mL) = mL/s
-    Serial.println("Minibomba APAGADA");
-
-    //Serial.print("Caudal: ");
-    //Serial.print(caudal);
-    //Serial.println(" mL/s");
+    //BT.print("Caudal: ");
+    //BT.print(caudal);
+    //BT.println(" mL/s");
   }
 }
 
@@ -262,8 +258,8 @@ void printStatusMinibomba(void) {
 void printRpmMotor(void) {
   if ((now - lastTimeMotor) >= intervalPrintMotor) {
     rpm = ((double) encoderCount/960)*60;
-    Serial.print("RPM: ");
-    Serial.println(rpm);
+    BT.print("RPM: ");
+    BT.println(rpm);
     encoderCount = 0;
     lastTimeMotor = now;
   }
@@ -274,13 +270,9 @@ void printTemp(void) {
   if ((now - lastTimeTemp) >= intervalPrintTemp) {
     sensorDS18B20.requestTemperatures();
 
-    Serial.print("Temperatura sensor 1: ");
-    Serial.print(sensorDS18B20.getTempCByIndex(0));
-    Serial.println(" C");
-
-    //Serial.print("Temperatura sensor 2: ");
-    //Serial.print(sensorDS18B20.getTempCByIndex(1));
-    //Serial.println(" C");
+    BT.print("Temperatura sensor 1: ");
+    BT.print(sensorDS18B20.getTempCByIndex(0));
+    BT.println(" C");
 
     lastTimeTemp = now;
   }
@@ -297,9 +289,9 @@ void changeMode(void) {
    * - s: Detener todos los modos
    * - o Y: Off Y (apagar el modo Y)
    */
-  cmd = BT.readString();//TODO: cmd = Serial.readString();
-  Serial.print("BT received: ");
-  Serial.println(cmd);
+  cmd = BT.readString();
+  BT.print("BT received: ");
+  BT.println(cmd);
   cmd.trim();
   cmdSep = cmd.indexOf(" ");
   cmdType = cmd.substring(0, cmdSep);
@@ -311,12 +303,12 @@ void changeMode(void) {
       pesoDeseado = volumenDeseado * densidad;
       modeVol = 1;
 
-      Serial.println("\n¡¡¡LISTO PARA DOSIFICAR!!!\n");
-      Serial.print("Se van a completar ");
-      Serial.print(volumenDeseado);
-      Serial.print(" mL (");
-      Serial.print(pesoDeseado);
-      Serial.println(" g)");
+      BT.println("\n¡¡¡LISTO PARA DOSIFICAR!!!\n");
+      BT.print("Se van a completar ");
+      BT.print(volumenDeseado);
+      BT.print(" mL (");
+      BT.print(pesoDeseado);
+      BT.println(" g)");
       delay(500);
       break;
 
@@ -325,19 +317,19 @@ void changeMode(void) {
       delayRpm = pow(2*8.69799685132514e-6*rpmDeseado, -1.0330578512396695);
       modeMix = 1;
 
-      Serial.println("\n¡¡¡LISTO PARA MEZCLAR!!!\n");
-      Serial.print("Se van a mezclar a ");
-      Serial.print(rpmDeseado);
-      Serial.print(" RPM ( delay de ");
-      Serial.print(delayRpm);
-      Serial.println(" us)");
+      BT.println("\n¡¡¡LISTO PARA MEZCLAR!!!\n");
+      BT.print("Se van a mezclar a ");
+      BT.print(rpmDeseado);
+      BT.print(" RPM ( delay de ");
+      BT.print(delayRpm);
+      BT.println(" us)");
       delay(500);
       break;
 
     case 't':
       modeTemp = 1;
 
-      Serial.println("\n¡¡¡LISTO PARA MEDIR TEMPERATURA!!!\n");
+      BT.println("\n¡¡¡LISTO PARA MEDIR TEMPERATURA!!!\n");
       delay(500);      
       break;
 
@@ -347,7 +339,7 @@ void changeMode(void) {
       modeMix = 0;
       modeTemp = 0;
 
-      Serial.println("\n¡¡¡LISTO PARA PESAR!!!\n");
+      BT.println("\n¡¡¡LISTO PARA PESAR!!!\n");
       break;
 
     case 's':
@@ -355,31 +347,31 @@ void changeMode(void) {
       modeMix = 0;
       modeTemp = 0;
 
-      Serial.println("\n¡¡¡SE HA DETENIDO TODO!!!\n");
+      BT.println("\n¡¡¡SE HA DETENIDO TODO!!!\n");
       break;
     
     case 'o':
       switch (cmdValue[0]) {
         case 'v':
           modeVol = 0;
-          Serial.println("\nSE HA DETENIDO LA DOSIFICACIÓN\n");
+          BT.println("\nSE HA DETENIDO LA DOSIFICACIÓN\n");
           break;
         case 'm':
           modeMix = 0;
-          Serial.println("\nSE HA DETENIDO EL MEZCLADO\n");
+          BT.println("\nSE HA DETENIDO EL MEZCLADO\n");
           break;
         case 't':
           modeTemp = 0;
-          Serial.println("\nSE HA DETENIDO LA MEDICIÓN DE TEMPERATURA\n");
+          BT.println("\nSE HA DETENIDO LA MEDICIÓN DE TEMPERATURA\n");
           break;
         default:
-          Serial.println("Comando no reconocido");
+          BT.println("Comando no reconocido");
           break;
       }
       break;
 
     default:
-      Serial.println("Comando no reconocido");
+      BT.println("Comando no reconocido");
       break;
   }
 
@@ -405,15 +397,15 @@ void modeChanged(void) {
   }
   
   if (modeVol) {
-    Serial.println("Modo de dosificación por volumen");
+    BT.println("Modo de dosificación por volumen");
   }
   if (modeMix) {
-    Serial.println("Modo de mezclado");
+    BT.println("Modo de mezclado");
   }
   if (modeTemp) {
-    Serial.println("Modo de medición de temperatura");
+    BT.println("Modo de medición de temperatura");
   }
   if (modeNone) {
-    Serial.println("No hay modos activos");
+    BT.println("No hay modos activos");
   }
 }
